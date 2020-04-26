@@ -38,7 +38,7 @@ from gaussianlda.utils import get_logger, get_progress_bar, chol_rank1_downdate,
 
 
 class GaussianLDAAliasTrainer_TextAudio:
-    def __init__(self, corpus, audio_features,vocab_embeddings, vocab,num_tables, alpha=None, kappa=0.1, log=None, save_path=None,
+    def __init__(self, corpus,audio_corpus, audio_features,vocab_embeddings, vocab,num_tables, alpha=None, kappa=0.1, log=None, save_path=None,
                  show_topics=None, mh_steps=2, num_words_for_formatting=None, das_normalization=True, show_progress=True):
         """
 
@@ -86,8 +86,8 @@ class GaussianLDAAliasTrainer_TextAudio:
         self.embedding_size = vocab_embeddings.shape[1]
         self.num_terms = vocab_embeddings.shape[0]
         
-        self.audio_feature_size = audio_features[0].shape[1]
-        self.audio_num_terms = audio_features[0].shape[0]
+        self.audio_feature_size = audio_features.shape[1]
+        self.audio_num_terms = audio_features.shape[0]
         # List of list of ints
         self.corpus = corpus
         #numpy array with audio features per document (length of the array per document can be different from the number of words in the document)
@@ -137,7 +137,7 @@ class GaussianLDAAliasTrainer_TextAudio:
         # Normal inverse wishart prior
         self.prior = Wishart(self.vocab_embeddings, kappa=kappa)
         # Normal inverse wishart prior for the audio component
-        self.prior_audio = Wishart(self.audio_data, kappa=kappa)
+        self.prior_audio = Wishart(self.audio_features, kappa=kappa)
         
         # Cache k_0\mu_0\mu_0^T, only compute it once
         # Used in calculate_table_params()
