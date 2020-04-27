@@ -90,6 +90,7 @@ class GaussianLDAAliasTrainer_TextAudio:
         self.audio_num_terms = audio_features.shape[0]
         # List of list of ints
         self.corpus = corpus
+        self.audio_corpus = audio_corpus
         #numpy array with audio features per document (length of the array per document can be different from the number of words in the document)
         self.audio_features = audio_features
         # numIterations
@@ -210,7 +211,7 @@ class GaussianLDAAliasTrainer_TextAudio:
         pbar = get_progress_bar(len(self.corpus), title="Initializing", show_progress=self.show_progress)
         for doc_num, doc in enumerate(pbar(self.corpus)):
             
-            audio_scene = self.audio_features[doc_num]
+            audio_scene = self.audio_corpus[doc_num]
             tables = list(np.random.randint(self.num_tables, size=len(doc)))
             self.table_assignments.append(tables)
             
