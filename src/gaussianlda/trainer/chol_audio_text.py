@@ -567,7 +567,7 @@ class GaussianLDACholTrainer_TextAudio:
         """
         if d_type == "audio":
             return self._log_multivariate_tdensity_chol_tables_audio(x)
-        return self._log_multivariate_tdensity_chol_tables(x)
+        return self._log_multivariate_tdensity_chol_tables_text(x)
         """
                 ## Do for table 0 for debugging
                 # K x E
@@ -605,7 +605,7 @@ class GaussianLDACholTrainer_TextAudio:
                 return logprob
         """
 
-    def rm_id_table_text(self,d,w,old_table_id,x,cust_id):
+    def rm_id_table_text(self,d,w,x,cust_id):
         
         # Remove custId from his old_table
         old_table_id = self.table_assignments[d][w]
@@ -620,7 +620,7 @@ class GaussianLDACholTrainer_TextAudio:
         # Just update params for this customer
         self.update_table_params_text(old_table_id, cust_id, is_removed=True)
         
-    def rm_id_table_audio(self,d,w,old_table_id,x):
+    def rm_id_table_audio(self,d,w,x):
         
         # Remove custId from his old_table
         old_table_id = self.table_assignments_audio[d][w]
@@ -633,9 +633,9 @@ class GaussianLDACholTrainer_TextAudio:
 
         # Topic 'old_tabe_id' now has one member fewer
         # Just update params for this customer
-        self.update_table_params_audio(self,old_table_id, x, is_removed=True)
+        self.update_table_params_audio(old_table_id, x, is_removed=True)
         
-    def update_table_text(self,x,new_table_id,cust_id):
+    def update_table_text(self,d,w,x,new_table_id,cust_id):
         self.table_assignments[d][w] = new_table_id
         self.table_counts[new_table_id] += 1
         self.table_counts_per_doc[new_table_id, d] += 1
@@ -643,7 +643,7 @@ class GaussianLDACholTrainer_TextAudio:
         self.sum_squared_table_customers[new_table_id] += np.outer(x, x)
         self.update_table_params_text(new_table_id, cust_id)
         
-    def update_table_audio(self,x,new_table_id):
+    def update_table_audio(self,d,w,x,new_table_id):
         self.table_assignments_audio[d][w] = new_table_id
         self.table_counts_audio[new_table_id] += 1
         self.table_counts_per_doc_audio[new_table_id, d] += 1
@@ -666,32 +666,50 @@ class GaussianLDACholTrainer_TextAudio:
         """
         for iteration in range(num_iterations):
             self.log.info("Iteration {}".format(iteration))
-
+            
             pbar = get_progress_bar(len(self.corpus), title="Sampling")
             for d, doc in enumerate(pbar(self.corpus)):
                 if self.show_topics is not None and self.show_topics > 0 and d % self.show_topics == 0:
                     print("Topics after {:,} docs".format(d))
                     print(self.format_topics())
+                    
+                audio_doc = self.audio_corpus[d]
+                frame_start = 0
+                pad = len(audio_doc) // len(doc)
 
                 for w, cust_id in enumerate(doc):
                     x = self.vocab_embeddings[cust_id]
-                    y = self.audio_corpus[d][w]
-                    self.rm_id_table_text(d,w,old_table_id,x,cust_id)
-                    
-                    self.rm_id_table_audio(d,w,old_table_id,y)
-                    
-
+                    self.rm_id_table_text(d,w,x,cust_id)
                     # Now calculate the prior and likelihood for the customer to sit in each table and sample
                     # Go over each table
                     counts_text = self.table_counts_per_doc[:, d] + self.alpha
-                    counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
                     # Now calculate the likelihood for each table
                     log_lls_text = self.log_multivariate_tdensity_tables(x)
-                    log_lls_audio = self.log_multivariate_tdensity_tables(y,"audio")
+                    
                     # Add log prior in the posterior vector
                     log_posteriors_text = np.log(counts_text) + log_lls_text
-                    log_posteriors_audio = np.log(counts_audio) + log_lls_audio
-                    
+ 
+                    for frame_index in range(frame_start,pad):
+                        y = audio_doc[frame_index]
+                        self.rm_id_table_audio(d,frame_index,y)
+                        counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
+                        log_lls_audio = self.log_multivariate_tdensity_tables(y,"audio")
+                        log_posteriors_audio = np.log(counts_audio) + log_lls_audio
+                        log_posteriors = log_posteriors_text + log_posteriors_audio
+                        # To prevent overflow, subtract by log(p_max).
+                        # This is because when we will be normalizing after exponentiating,
+                        # each entry will be exp(log p_i - log p_max )/\Sigma_i exp(log p_i - log p_max)
+                        # the log p_max cancels put and prevents overflow in the exponentiating phase.
+                        posterior = np.exp(log_posteriors - log_posteriors.max())
+                        posterior /= posterior.sum()
+                        # Now sample an index from this posterior vector.
+                        new_table_id = np.random.choice(self.num_tables, p=posterior)
+                        self.update_table_audio(d, w, y,new_table_id)
+                        
+                    pad+=pad
+                    frame_start=pad
+
+                                    
                     log_posteriors = log_posteriors_text + log_posteriors_audio
                     # To prevent overflow, subtract by log(p_max).
                     # This is because when we will be normalizing after exponentiating,
@@ -703,10 +721,10 @@ class GaussianLDACholTrainer_TextAudio:
                     new_table_id = np.random.choice(self.num_tables, p=posterior)
 
                     # Now have a new assignment: add its counts
-                    self.update_table_text(x,new_table_id,cust_id)
-                    self.update_table_text(y,new_table_id)
+                    self.update_table_text(d, w, x,new_table_id, cust_id)
 
                     #self.check_everything(iteration, d, w)
+                    
 
                 #if self.cholesky_decomp:
                 #    # After each iteration, recompute the Cholesky decomposition fully, to avoid numerical inaccuracies
