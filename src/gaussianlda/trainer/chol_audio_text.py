@@ -627,6 +627,10 @@ class GaussianLDACholTrainer_TextAudio:
         self.table_assignments_audio[d][w] = -1  # Doesn't really make any difference, as only counts are used
         self.table_counts_audio[old_table_id] -= 1
         self.table_counts_per_doc_audio[old_table_id, d] -= 1
+        if self.table_counts_per_doc_audio[old_table_id, d] < 0:
+            self.table_counts_per_doc_audio[old_table_id, d]+=1
+            print(self.table_counts_per_doc_audio[:, d] +1)
+            print(self.table_counts_per_doc_audio[:, d])
         # Update vector means etc
         self.sum_table_customers_audio[old_table_id] -= x
         self.sum_squared_table_customers_audio[old_table_id] -= np.outer(x, x)
@@ -672,7 +676,8 @@ class GaussianLDACholTrainer_TextAudio:
                 if self.show_topics is not None and self.show_topics > 0 and d % self.show_topics == 0:
                     print("Topics after {:,} docs".format(d))
                     print(self.format_topics())
-                    
+                if  len(doc) == 0:
+                    continue
                 audio_doc = self.audio_corpus[d]
                 frame_start = 0
                 pad = len(audio_doc) // len(doc)
@@ -696,15 +701,12 @@ class GaussianLDACholTrainer_TextAudio:
                         log_lls_audio = self.log_multivariate_tdensity_tables(y,"audio")
                         log_posteriors_audio = np.log(counts_audio) + log_lls_audio
                         log_posteriors = log_posteriors_text + log_posteriors_audio
-                        # To prevent overflow, subtract by log(p_max).
-                        # This is because when we will be normalizing after exponentiating,
-                        # each entry will be exp(log p_i - log p_max )/\Sigma_i exp(log p_i - log p_max)
-                        # the log p_max cancels put and prevents overflow in the exponentiating phase.
+ 
                         posterior = np.exp(log_posteriors - log_posteriors.max())
                         posterior /= posterior.sum()
                         # Now sample an index from this posterior vector.
                         new_table_id = np.random.choice(self.num_tables, p=posterior)
-                        self.update_table_audio(d, w, y,new_table_id)
+                        self.update_table_audio(d, frame_index, y,new_table_id)
                         
                     pad+=pad
                     frame_start=pad
