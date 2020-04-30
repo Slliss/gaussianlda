@@ -627,10 +627,6 @@ class GaussianLDACholTrainer_TextAudio:
         self.table_assignments_audio[d][w] = -1  # Doesn't really make any difference, as only counts are used
         self.table_counts_audio[old_table_id] -= 1
         self.table_counts_per_doc_audio[old_table_id, d] -= 1
-        if self.table_counts_per_doc_audio[old_table_id, d] < 0:
-            self.table_counts_per_doc_audio[old_table_id, d]+=1
-            print(self.table_counts_per_doc_audio[:, d] +1)
-            print(self.table_counts_per_doc_audio[:, d])
         # Update vector means etc
         self.sum_table_customers_audio[old_table_id] -= x
         self.sum_squared_table_customers_audio[old_table_id] -= np.outer(x, x)

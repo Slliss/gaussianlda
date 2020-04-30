@@ -101,7 +101,8 @@ class GaussianLDAAliasTrainer_TextAudio:
         # In the current iteration, map of table_id's to number of customers. Table id starts from 0
         # Use shared memory
         self.table_counts = SharedArray.create(self.num_tables, "int")
-        self.table_counts_audio = SharedArray.create(self.num_tables, "int")
+        self.table_counts_audio = np.zeros((self.num_tables), dtype=np.int32)
+        #self.table_counts_audio = SharedArray.create(self.num_tables, "int")
         
         # K x N array.tableCounts[i][j] represents how many words of document j are present in topic i.
         self.table_counts_per_doc = np.zeros((self.num_tables, self.num_documents), dtype=np.int32)
@@ -116,12 +117,16 @@ class GaussianLDAAliasTrainer_TextAudio:
         # This is the bayesian mean (i.e has the prior part too)
         # Use shared memory
         self.table_means = SharedArray.create((self.num_tables, self.embedding_size), "float")
-        self.table_means_audio = SharedArray.create((self.num_tables, self.audio_feature_size), "float")
+        self.table_means_audio = np.zeros((self.num_tables, self.audio_feature_size), dtype=np.float64)
+        #self.table_means_audio = SharedArray.create((self.num_tables, self.audio_feature_size), "float")
+        
         # log-determinant of covariance matrix for each table.
         # Since 0.5 * logDet is required in (see logMultivariateTDensity), therefore that value is kept.
         # Use shared memory
         self.log_determinants = SharedArray.create(self.num_tables, "float")
-        self.log_determinants_audio = SharedArray.create(self.num_tables, "float")
+        self.log_determinants_audio = np.zeros(self.num_tables, dtype=np.float64)
+        #self.log_determinants_audio = SharedArray.create(self.num_tables, "float")
+        
         # Stores the squared sum of the vectors of customers at a given table
         self.sum_squared_table_customers = np.zeros((self.num_tables, self.embedding_size, self.embedding_size), dtype=np.float64)
         self.sum_squared_table_customers_audio = np.zeros((self.num_tables, self.audio_feature_size, self.audio_feature_size), dtype=np.float64)
@@ -131,9 +136,10 @@ class GaussianLDAAliasTrainer_TextAudio:
             (self.num_tables, self.embedding_size, self.embedding_size), "float"
         )
         
-        self.table_cholesky_ltriangular_mat_audio = SharedArray.create(
-            (self.num_tables, self.audio_feature_size, self.audio_feature_size), "float"
-        )
+        
+        self.table_cholesky_ltriangular_mat_audio = np.zeros(
+                (self.num_tables, self.audio_feature_size, self.audio_feature_size), dtype=np.float64)
+        #self.table_cholesky_ltriangular_mat_audio = SharedArray.create(self.num_tables, self.audio_feature_size, self.audio_feature_size), "float")
 
         # Normal inverse wishart prior
         self.prior = Wishart(self.vocab_embeddings, kappa=kappa)
@@ -198,12 +204,12 @@ class GaussianLDAAliasTrainer_TextAudio:
         
         # Means are set to the prior and then updated as we add each assignment
         self.table_means.np[:] = self.prior.mu
-        self.table_means_audio.np[:] = self.prior_audio.mu
+        self.table_means_audio[:] = self.prior_audio.mu
 
         # Initialize the cholesky decomp of each table, with no counts yet
         for table in range(self.num_tables):
             self.table_cholesky_ltriangular_mat.np[table] = self.prior.chol_sigma.copy()
-            self.table_cholesky_ltriangular_mat_audio.np[table] = self.prior_audio.chol_sigma.copy()
+            self.table_cholesky_ltriangular_mat_audio[table] = self.prior_audio.chol_sigma.copy()
 
         # Randomly assign customers to tables
         self.table_assignments = []
@@ -227,7 +233,7 @@ class GaussianLDAAliasTrainer_TextAudio:
                 self.update_table_params_text(table, word)
                 
             for (frame, table) in zip(audio_scene, tables_audio):
-                self.table_counts_audio.np[table] += 1
+                self.table_counts_audio[table] += 1
                 self.table_counts_per_doc_audio[table, doc_num] += 1
                 # update the sumTableCustomers
                 self.sum_squared_table_customers_audio[table] += np.outer(frame, frame)
@@ -235,7 +241,7 @@ class GaussianLDAAliasTrainer_TextAudio:
                 self.update_table_params_audio(table, frame)
 
     def update_table_params_audio(self, table_id, frame, is_removed=False):
-            count = self.table_counts_audio.np[table_id]
+            count = self.table_counts_audio[table_id]
             k_n = self.prior_audio.kappa + count
             nu_n = self.prior_audio.nu + count
             scaleTdistrn = (k_n + 1.) / (k_n * (float(nu_n) - self.audio_feature_size + 1.))
@@ -250,24 +256,23 @@ class GaussianLDAAliasTrainer_TextAudio:
 
                 # calculate (X_{n} - \mu_{n-1})
                 # This uses the old mean, not yet updated
-                x = (frame - self.table_means_audio.np[table_id]) * np.sqrt((k_n + 1.) / k_n)
+                x = (frame - self.table_means_audio[table_id]) * np.sqrt((k_n + 1.) / k_n)
                 # The Chol rank1 downdate modifies the array in place
-                with self.table_cholesky_ltriangular_mat_audio.lock:
-                    chol_rank1_downdate(self.table_cholesky_ltriangular_mat_audio.np[table_id], x)
+                chol_rank1_downdate(self.table_cholesky_ltriangular_mat_audio[table_id], x)
 
                 # Update the mean
-                new_mean = self.table_means_audio.np[table_id] * (k_n + 1.)
+                new_mean = self.table_means_audio[table_id] * (k_n + 1.)
                 new_mean -= frame
                 new_mean /= k_n
-                with self.table_means_audio.lock:
-                    self.table_means_audio.np[table_id] = new_mean
+                
+                self.table_means_audio[table_id] = new_mean
             else:
                 # New customer is added
-                new_mean = self.table_means_audio.np[table_id] * (k_n - 1.)
+                new_mean = self.table_means_audio[table_id] * (k_n - 1.)
                 new_mean += frame
                 new_mean /= k_n
-                with self.table_means_audio.lock:
-                    self.table_means_audio.np[table_id] = new_mean
+
+                self.table_means_audio[table_id] = new_mean
 
                 # We need to recompute det(Sig) and (v_{d,i} - mu) . Sig^-1 . (v_{d,i} - mu)
                 # v_{d,i} is the word vector being added
@@ -276,17 +281,16 @@ class GaussianLDAAliasTrainer_TextAudio:
                 #  \Sigma_{n+1} = \Sigma_{n} + (k_0 + n + 1) / (k_0 + n) * (x_{n+1} - \mu_{n+1})(x_{n+1} - \mu_{n+1}) ^ T
                 # calculate (X_{n} - \mu_{n-1})
                 # This time we update the mean first and use the new mean
-                x = (frame - self.table_means_audio.np[table_id]) * np.sqrt(k_n / (k_n - 1.))
+                x = (frame - self.table_means_audio[table_id]) * np.sqrt(k_n / (k_n - 1.))
                 # The update modifies the decomp array in place
-                with self.table_cholesky_ltriangular_mat_audio.lock:
-                    chol_rank1_update(self.table_cholesky_ltriangular_mat_audio.np[table_id], x)
+                chol_rank1_update(self.table_cholesky_ltriangular_mat_audio[table_id], x)
 
             # Calculate the 0.5 * log(det) + D / 2 * scaleTdistrn
             # The scaleTdistrn is because the posterior predictive distribution sends in a scaled value of \Sigma
-            with self.log_determinants_audio.lock:
-                self.log_determinants_audio.np[table_id] = \
-                    np.sum(np.log(np.diagonal(self.table_cholesky_ltriangular_mat_audio.np[table_id]))) \
-                    + self.audio_feature_size * np.log(scaleTdistrn) / 2.
+           
+            self.log_determinants_audio[table_id] = \
+                np.sum(np.log(np.diagonal(self.table_cholesky_ltriangular_mat_audio[table_id]))) \
+                + self.audio_feature_size * np.log(scaleTdistrn) / 2.
 
 
     def update_table_params_text(self, table_id, cust_id, is_removed=False):
@@ -409,6 +413,54 @@ class GaussianLDAAliasTrainer_TextAudio:
                           (nu + self.embedding_size) / 2. * np.log(1. + val / nu)
                   )
         return logprob
+    
+    def rm_id_table_audio(self,d,w,x):
+        # Remove custId from his old_table
+        old_table_id = self.table_assignments_audio[d][w]
+        self.table_assignments_audio[d][w] = -1  # Doesn't really make any difference, as only counts are used
+        self.table_counts_audio[old_table_id] -= 1
+        self.table_counts_per_doc_audio[old_table_id, d] -= 1
+        # Update vector means etc
+        self.sum_squared_table_customers_audio[old_table_id] -= np.outer(x, x)
+        
+    def update_table_audio(self,d,w,x,new_table_id):
+        self.table_assignments_audio[d][w] = new_table_id
+        self.table_counts_audio[new_table_id] += 1
+        self.table_counts_per_doc_audio[new_table_id, d] += 1
+        self.sum_squared_table_customers_audio[new_table_id] += np.outer(x, x)
+        self.update_table_params_audio(new_table_id, x)
+        
+    def log_multivariate_tdensity_tables_audio(self, x):
+        """
+        Gaussian likelihood for a table-embedding pair when using Cholesky decomposition.
+        This version computes the likelihood for all tables in parallel.
+
+        """
+        count = self.table_counts_audio
+        k_n = self.prior_audio.kappa + count
+        nu_n = self.prior_audio.nu + count
+        scaleTdistrn = np.sqrt((k_n + 1.) / (k_n * (nu_n - self.audio_feature_size + 1.)))
+        nu = self.prior_audio.nu + count - self.audio_feature_size + 1.
+        # Since I am storing lower triangular matrices, it is easy to calculate (x-\mu)^T\Sigma^-1(x-\mu)
+        # therefore I am gonna use triangular solver first calculate (x-mu)
+        x_minus_mu = x[None, :] - self.table_means_audio
+        # Now scale the lower tringular matrix
+        ltriangular_chol = scaleTdistrn[:, None, None] * self.table_cholesky_ltriangular_mat_audio
+        # We can't do solve_triangular for all matrices at once in scipy
+        val = np.zeros(self.num_tables, dtype=np.float64)
+        for table in range(self.num_tables):
+            table_solved = solve_triangular(ltriangular_chol[table], x_minus_mu[table])
+            # Now take xTx (dot product)
+            val[table] = (table_solved ** 2.).sum()
+
+        logprob = gammaln((nu + self.audio_feature_size) / 2.) - \
+                  (
+                          gammaln(nu / 2.) +
+                          self.audio_feature_size / 2. * (np.log(nu) + np.log(math.pi)) +
+                          self.log_determinants_audio +
+                          (nu + self.audio_feature_size) / 2. * np.log(1. + val / nu)
+                  )
+        return logprob
 
     def sample(self, num_iterations):
         """
@@ -452,8 +504,8 @@ class GaussianLDAAliasTrainer_TextAudio:
                     if self.show_topics is not None and self.show_topics > 0 and d % self.show_topics == 0:
                         print("Topics after {:,} docs".format(d))
                         print(self.format_topics())
-
-                    for w, cust_id in enumerate(doc):
+                        
+                    for w, cust_id in enumerate(doc):                        
                         x = self.vocab_embeddings[cust_id]
 
                         # Remove custId from his old_table
@@ -472,10 +524,19 @@ class GaussianLDAAliasTrainer_TextAudio:
                         # Under the alias method, we only do the full likelihood computation for topics
                         # that already have a non-zero count in the current document
                         non_zero_tables = np.where(self.table_counts_per_doc[:, d] > 0)[0]
+                        self.aliases.lock.acquire_read(cust_id)
                         if len(non_zero_tables) == 0:
                             # If there's only one word in a doc, there are no topics to compute the full posterior for
                             no_non_zero = True
                         else:
+                            audio_doc = self.audio_corpus[d]
+                            if  len(non_zero_tables) == 0:
+                                pad = len(audio_doc) // 1
+                            else:
+                                
+                                frame_start = 0
+                                pad = len(audio_doc) // len(non_zero_tables)
+                            audio_doc_mean = np.mean(audio_doc)
                             no_non_zero = False
                             # We only compute the posterior for these topics
                             log_priors = np.log(self.table_counts_per_doc[non_zero_tables, d])
@@ -483,8 +544,52 @@ class GaussianLDAAliasTrainer_TextAudio:
                             for nz_table, table in enumerate(non_zero_tables):
                                 log_likelihoods[nz_table] = self.log_multivariate_tdensity(x, table)
                             log_posterior = log_priors + log_likelihoods
+                            
+                            for frame_index in range(frame_start,pad):
+                                y = audio_doc[frame_index]
+                                self.rm_id_table_audio(d,frame_index,y)
+                                counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
+                                log_lls_audio = self.log_multivariate_tdensity_tables_audio(y)
+                                log_posteriors_audio = np.log(counts_audio) + log_lls_audio
+                                
+                                for log_iter, table in enumerate(non_zero_tables):
+                                    log_posteriors_audio[table] += log_posterior[log_iter]
+                                
+                                log_posteriors = log_posteriors_audio
 
+                                posterior = np.exp(log_posteriors - log_posteriors.max())
+                                posterior /= posterior.sum()
+                                # Now sample an index from this posterior vector.
+                                new_table_id = np.random.choice(self.num_tables, p=posterior)
+                                self.update_table_audio(d, frame_index, y,new_table_id)
+                             
+                            """
+                            y = audio_doc[frame_start]
+                            self.rm_id_table_audio(d,frame_start,y)
+                            counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
+                            log_lls_audio = self.log_multivariate_tdensity_tables_audio(y)
+                            log_posteriors_audio = np.log(counts_audio) + log_lls_audio
+                            
+                            for log_iter, table in enumerate(non_zero_tables):
+                                log_posteriors_audio[table] += log_posterior[log_iter]
+                            
+                            log_posteriors = log_posteriors_audio
+
+                            posterior = np.exp(log_posteriors - log_posteriors.max())
+                            posterior /= posterior.sum()
+                            # Now sample an index from this posterior vector.
+                            new_table_id = np.random.choice(self.num_tables, p=posterior)
+                            self.update_table_audio(d, frame_start, y,new_table_id)
+                            """
+
+                            pad+=pad
+                            frame_start=pad
+                            
                             # To prevent overflow, subtract by log(p_max)
+                                
+                            for log_iter, table in enumerate(non_zero_tables):
+                                   log_posterior[log_iter] += log_posteriors_audio[table]                            
+                                                        
                             max_log_posterior = log_posterior.max()
                             scaled_posterior = log_posterior - max_log_posterior
                             if self.das_normalization:
@@ -501,7 +606,7 @@ class GaussianLDAAliasTrainer_TextAudio:
                             normed_posterior = unnormed_posterior / unnormed_posterior.sum()
 
                         # Don't let the alias parameters get updated in the middle of the sampling
-                        self.aliases.lock.acquire_read(cust_id)
+                        
                         select_pr = psum / (psum + self.alpha*self.aliases.likelihood_sum.np[cust_id])
 
                         # MHV to draw new topic
