@@ -2,3 +2,5 @@ from gaussianlda.trainer.chol import GaussianLDATrainer
 from gaussianlda.trainer.chol_alias import GaussianLDAAliasTrainer
 from gaussianlda.trainer.chol_alias_audio_text import GaussianLDAAliasTrainer_TextAudio
 from gaussianlda.trainer.chol_audio_text import GaussianLDACholTrainer_TextAudio
+from gaussianlda.trainer.chol_alias_audio import GaussianLDAAliasTrainer_Audio
+from gaussianlda.trainer.chol_audio import GaussianLDATrainer_chol_audio
