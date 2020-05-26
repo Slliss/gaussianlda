@@ -743,7 +743,7 @@ class GaussianLDACholTrainer_TextAudio_token_bigram:
                         log_lls_audio = self.log_multivariate_tdensity_tables(y,"audio")
                         
                         # Add log prior in the posterior vector
-                        log_posteriors_audio = np.log(counts_audio) + log_lls_audio + log_prev_token_prob
+                        log_posteriors_audio = np.log(counts_audio) + log_lls_audio
                         
                         if frame_index == 0:
                             log_prev_audio_token = log_lls_audio
