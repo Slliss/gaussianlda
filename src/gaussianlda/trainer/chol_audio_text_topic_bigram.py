@@ -127,6 +127,12 @@ class GaussianLDACholTrainer_TextAudio_topic_bigram:
         
         self.table_cholesky_ltriangular_mat_audio = np.zeros(
                 (self.num_tables, self.audio_feature_size, self.audio_feature_size), dtype=np.float64)
+        
+        #topic h=0 that represents a special topic for the beggining of the chain for each document
+        self.topic_pair_counts = np.zeros(((self.num_tables +1 )*self.num_tables, self.num_documents), dtype=np.int32)
+        
+        #topic h=0 that represents a special topic for the beggining of the chain for each document
+        self.topic_pair_counts_audio = np.zeros(((self.num_tables +1 )*self.num_tables, self.num_documents), dtype=np.int32)
 
         # Normal inverse wishart prior
         self.prior = Wishart(self.vocab_embeddings, kappa=kappa)
@@ -228,6 +234,16 @@ class GaussianLDACholTrainer_TextAudio_topic_bigram:
                 self.sum_squared_table_customers_audio[table] += np.outer(frame, frame)
 
                 self.update_table_params_audio(table, frame)
+                
+                            
+            self.topic_pair_counts[0+tables[0], doc_num] +=1
+            for ass in range(1,len(tables)-1):
+                self.topic_pair_counts[(self.num_tables) * (tables[ass]+1)+tables[ass+1], doc_num] +=1
+            
+                        
+            self.topic_pair_counts_audio[0+tables_audio[0], doc_num] +=1
+            for ass in range(1,len(tables_audio)-1):
+                self.topic_pair_counts_audio[(self.num_tables) * (tables_audio[ass]+1)+tables_audio[ass+1], doc_num] +=1
 
     def update_table_params_audio(self, table_id, frame, is_removed=False):
             count = self.table_counts_audio[table_id]
@@ -713,12 +729,52 @@ class GaussianLDACholTrainer_TextAudio_topic_bigram:
                 audio_doc = self.audio_corpus[d]
                 frame_start = 0
                 pad = len(audio_doc) // len(doc)
+                
                 for w, cust_id in enumerate(doc):
                     x = self.vocab_embeddings[cust_id]
                     self.rm_id_table_text(d,w,x,cust_id)
+                    
+                    if w == 0 and len(doc)>1:
+                        #self.topic_pair_counts[0+old_table_id, d] -= 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+                        
+                        counts = self.topic_pair_counts[0:self.num_tables, d]
+                        out_counts= []
+                        for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts),self.num_tables):
+                            out_counts.append(self.topic_pair_counts[i, d])
+                        out_counts = np.array(out_counts)
+                            
+                        counts_text = counts + out_counts + 2* self.alpha
+                        
+                    if w == 0 and len(doc)==1:
+                        #self.topic_pair_counts[0+old_table_id, d] -= 1
+                        #next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+                        
+                        counts_text = self.topic_pair_counts[0:self.num_tables, d] + self.alpha
+                        
+                    elif w == len(doc)-1 :
+                        #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1)+ old_table_id, d] -= 1
+                        counts_text = self.topic_pair_counts[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] +self.alpha
+                    else:      
+                        #topic_assignment + 1 since we have an initial state for each doc chain + index of the topic pair
+                        #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1) + old_table_id, d] -= 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id + next_table_id, d] -= 1
+                        
+                        counts_text = self.topic_pair_counts[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] + self.alpha
+                        out_counts= []
+                        for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts),self.num_tables):
+                            out_counts.append(self.topic_pair_counts[i, d])
+                        out_counts = np.array(out_counts)
+                            
+                        counts_text = counts + out_counts + 2* self.alpha
+                    
+                                  
                     # Now calculate the prior and likelihood for the customer to sit in each table and sample
                     # Go over each table
-                    counts_text = self.table_counts_per_doc[:, d] + self.alpha
+                    #counts_text = self.table_counts_per_doc[:, d] + self.alpha
                     # Now calculate the likelihood for each table
                     log_lls_text = self.log_multivariate_tdensity_tables(x)
                     
@@ -728,7 +784,45 @@ class GaussianLDACholTrainer_TextAudio_topic_bigram:
                     for frame_index in range(frame_start,pad):
                         y = audio_doc[frame_index]
                         self.rm_id_table_audio(d,frame_index,y)
-                        counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
+                
+                        if w == 0 and len(doc)>1:
+                            #self.topic_pair_counts[0+old_table_id, d] -= 1
+                            next_table_id = self.table_assignments_audio[d][w+1]
+                            #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+
+                            counts = self.topic_pair_counts_audio[0:self.num_tables, d]
+                            out_counts= []
+                            for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts_audio),self.num_tables):
+                                out_counts.append(self.topic_pair_counts_audio[i, d])
+                            out_counts = np.array(out_counts)
+
+                            counts_audio = counts + out_counts + 2* self.alpha
+
+                        if w == 0 and len(doc)==1:
+                            #self.topic_pair_counts[0+old_table_id, d] -= 1
+                            #next_table_id = self.table_assignments[d][w+1]
+                            #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+
+                            counts_audio = self.topic_pair_counts_audio[0:self.num_tables, d] + self.alpha
+
+                        elif w == len(doc)-1 :
+                            #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1)+ old_table_id, d] -= 1
+                            counts_audio = self.topic_pair_counts_audio[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] +self.alpha
+                        else:      
+                            #topic_assignment + 1 since we have an initial state for each doc chain + index of the topic pair
+                            #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1) + old_table_id, d] -= 1
+                            next_table_id = self.table_assignments_audio[d][w+1]
+                            #self.topic_pair_counts[(self.num_tables+1) * old_table_id + next_table_id, d] -= 1
+
+                            counts_audio = self.topic_pair_counts_audio[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] + self.alpha
+                            out_counts= []
+                            for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts_audio),self.num_tables):
+                                out_counts.append(self.topic_pair_counts_audio[i, d])
+                            out_counts = np.array(out_counts)
+
+                            counts_audio = counts + out_counts + 2* self.alpha
+                
+                        #counts_audio = self.table_counts_per_doc_audio[:, d] + self.alpha
                         log_lls_audio = self.log_multivariate_tdensity_tables(y,"audio")
 
                         # Add log prior in the posterior vector

@@ -93,6 +93,9 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
         self.sum_table_customers = np.zeros((self.num_tables, self.embedding_size), dtype=np.float64)
         # Stores the squared sum of the vectors of customers at a given table
         self.sum_squared_table_customers = np.zeros((self.num_tables, self.embedding_size, self.embedding_size), dtype=np.float64)
+        
+        #topic h=0 that represents a special topic for the beggining of the chain for each document
+        self.topic_pair_counts = np.zeros(((self.num_tables +1 )*self.num_tables, self.num_documents), dtype=np.int32)
 
         if self.cholesky_decomp:
             # Cholesky Lower Triangular Decomposition of covariance matrix associated with each table.
@@ -167,6 +170,15 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
 
                 if self.cholesky_decomp:
                     self.update_table_params_chol(table, word)
+            
+            self.topic_pair_counts[0+tables[0], doc_num] +=1
+            for ass in range(1,len(tables)-1):
+                self.topic_pair_counts[(self.num_tables) * (tables[ass]+1)+tables[ass+1], doc_num] +=1
+                                    
+            #tables = list(np.random.randint((self.num_tables +1 )*self.num_tables, size=len(doc)))
+            #for (word, table) in zip(doc, tables):        
+            #    self.topic_pair_counts[table, doc_num] +=1
+                
 
             #self.check_everything(-1, doc_num, -1)
 
@@ -446,13 +458,12 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
         """
         for iteration in range(num_iterations):
             self.log.info("Iteration {}".format(iteration))
-            prev_topic_posterior = 0
             pbar = get_progress_bar(len(self.corpus), title="Sampling")
             for d, doc in enumerate(pbar(self.corpus)):
                 if self.show_topics is not None and self.show_topics > 0 and d % self.show_topics == 0:
                     print("Topics after {:,} docs".format(d))
                     print(self.format_topics())
-
+                prev_topic_assignment = 0
                 for w, cust_id in enumerate(doc):
                     x = cust_id
 
@@ -464,6 +475,45 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
                     # Update vector means etc
                     self.sum_table_customers[old_table_id] -= x
                     self.sum_squared_table_customers[old_table_id] -= np.outer(x, x)
+                    
+                    if w == 0 and len(doc)>1:
+                        #self.topic_pair_counts[0+old_table_id, d] -= 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+                        
+                        counts = self.topic_pair_counts[0:self.num_tables, d]
+                        out_counts= []
+                        for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts),self.num_tables):
+                            out_counts.append(self.topic_pair_counts[i, d])
+                        out_counts = np.array(out_counts)
+                            
+                        counts = counts + out_counts + 2* self.alpha
+                        
+                    if w == 0 and len(doc)==1:
+                        #self.topic_pair_counts[0+old_table_id, d] -= 1
+                        #next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id+ next_table_id, d] -= 1
+                        
+                        counts = self.topic_pair_counts[0:self.num_tables, d] + self.alpha
+                        
+                    elif w == len(doc)-1 :
+                        #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1)+ old_table_id, d] -= 1
+                        counts = self.topic_pair_counts[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] +self.alpha
+                    else:      
+                        #topic_assignment + 1 since we have an initial state for each doc chain + index of the topic pair
+                        #self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1) + old_table_id, d] -= 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        #self.topic_pair_counts[(self.num_tables+1) * old_table_id + next_table_id, d] -= 1
+                        
+                        counts = self.topic_pair_counts[self.num_tables *(prev_topic_assignment+1) : self.num_tables *(prev_topic_assignment+1)+self.num_tables, d] + self.alpha
+                        out_counts= []
+                        for i in range(self.num_tables+next_table_id,len(self.topic_pair_counts),self.num_tables):
+                            out_counts.append(self.topic_pair_counts[i, d])
+                        out_counts = np.array(out_counts)
+                            
+                        counts = counts + out_counts + 2* self.alpha
+                    
+                    
 
                     # Topic 'old_tabe_id' now has one member fewer
                     if self.cholesky_decomp:
@@ -474,13 +524,11 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
                         self.set_table_parameters(old_table_id)
 
                     #self.check_everything(iteration, d, w, mid_sample=True)
-
-                    # Now calculate the prior and likelihood for the customer to sit in each table and sample
-                    # Go over each table
-                    counts = self.table_counts_per_doc[:, d] + self.alpha
+                    
+                    
                     # Now calculate the likelihood for each table
                     log_lls = self.log_multivariate_tdensity_tables(x)
-                    
+
                     # Add log prior in the posterior vector
                     log_posteriors = np.log(counts) + log_lls
 
@@ -488,13 +536,7 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
                     # This is because when we will be normalizing after exponentiating,
                     # each entry will be exp(log p_i - log p_max )/\Sigma_i exp(log p_i - log p_max)
                     # the log p_max cancels put and prevents overflow in the exponentiating phase.
-                    
-                    if d == 0:
-                        prev_topic_posterior = log_posteriors
-                    else:
-                        log_posteriors = log_posteriors+prev_topic_posterior
-                        prev_topic_posterior = log_posteriors
-                    
+
                     posterior = np.exp(log_posteriors - log_posteriors.max())
                     posterior /= posterior.sum()
                     # Now sample an index from this posterior vector.
@@ -506,6 +548,25 @@ class GaussianLDATrainer_chol_audio_topic_bigram:
                     self.table_counts_per_doc[new_table_id, d] += 1
                     self.sum_table_customers[new_table_id] += x
                     self.sum_squared_table_customers[new_table_id] += np.outer(x, x)
+                    
+                    if w == 0 and len(doc)>1:
+                        self.topic_pair_counts[0+new_table_id, d] += 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        self.topic_pair_counts[(self.num_tables+1) * new_table_id+ next_table_id, d] += 1
+                        
+                    if w == 0 and len(doc)==1:
+                        self.topic_pair_counts[0+new_table_id, d] += 1
+                        #self.topic_pair_counts[0+old_table_id, d] -= 1
+
+                    elif w == len(doc)-1:
+                        self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1)+ next_table_id, d] += 1
+                    else:      
+                        #topic_assignment + 1 since we have an initial state for each doc chain + index of the topic pair
+                        self.topic_pair_counts[(self.num_tables) * (prev_topic_assignment+1) + new_table_id, d] += 1
+                        next_table_id = self.table_assignments[d][w+1]
+                        self.topic_pair_counts[(self.num_tables+1) * new_table_id + next_table_id, d] += 1
+                    
+                    prev_topic_assignment = new_table_id
 
                     if self.cholesky_decomp:
                         self.update_table_params_chol(new_table_id, cust_id)
